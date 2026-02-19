@@ -1,18 +1,21 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 public class MoveCube : MonoBehaviour
 {
-    // Start is called before the first frame update
-    void Start()
+    [SerializeField] private float rotationSpeed = 45f;
+    private Rigidbody rb;
+
+    void Awake()
     {
-        transform.position = new Vector3(0, 0, 0);
+        rb = GetComponent<Rigidbody>();
+        if (rb == null)
+        {
+            rb = gameObject.AddComponent<Rigidbody>();
+        }
     }
 
-    // Update is called once per frame
     void Update()
     {
-        transform.Translate(Vector3.forward * Time.deltaTime);
+        transform.Rotate(Vector3.up, rotationSpeed * Time.deltaTime, Space.World);
     }
 }
