@@ -20,7 +20,7 @@ public class Explosion : MonoBehaviour
     [SerializeField] private Color highlightColor = new Color(1f, 0.4f, 0.1f, 0.45f);
 
     private Canvas overlayCanvas;
-    private Image highlightImage;
+    private RawImage highlightImage;
     private Coroutine highlightCoroutine;
     private readonly HashSet<Rigidbody> rigidbodyCache = new HashSet<Rigidbody>();
 
@@ -152,12 +152,20 @@ public class Explosion : MonoBehaviour
     {
         if (overlayCanvas == null)
         {
-            GameObject canvasObj = new GameObject("ExplosionHighlightCanvas");
-            overlayCanvas = canvasObj.AddComponent<Canvas>();
-            overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            overlayCanvas.sortingOrder = 1000;
-            canvasObj.AddComponent<CanvasScaler>();
-            canvasObj.AddComponent<GraphicRaycaster>();
+            Canvas existing = FindObjectOfType<Canvas>();
+            if (existing != null && existing.renderMode == RenderMode.ScreenSpaceOverlay)
+            {
+                overlayCanvas = existing;
+            }
+            else
+            {
+                GameObject canvasObj = new GameObject("ExplosionHighlightCanvas");
+                overlayCanvas = canvasObj.AddComponent<Canvas>();
+                overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                overlayCanvas.sortingOrder = 1000;
+                canvasObj.AddComponent<CanvasScaler>();
+                canvasObj.AddComponent<GraphicRaycaster>();
+            }
         }
 
         if (highlightImage != null)
@@ -167,10 +175,9 @@ public class Explosion : MonoBehaviour
 
         GameObject imageObj = new GameObject("ClickHighlight");
         imageObj.transform.SetParent(overlayCanvas.transform, false);
-        highlightImage = imageObj.AddComponent<Image>();
+        highlightImage = imageObj.AddComponent<RawImage>();
         highlightImage.raycastTarget = false;
-        highlightImage.sprite = CreateCircleSprite(128);
-        highlightImage.type = Image.Type.Simple;
+        highlightImage.texture = CreateCircleTexture(128);
         highlightImage.color = highlightColor;
 
         RectTransform rt = highlightImage.rectTransform;
@@ -182,7 +189,7 @@ public class Explosion : MonoBehaviour
         highlightImage.gameObject.SetActive(false);
     }
 
-    private Sprite CreateCircleSprite(int size)
+    private Texture2D CreateCircleTexture(int size)
     {
         Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
         texture.wrapMode = TextureWrapMode.Clamp;
@@ -190,23 +197,23 @@ public class Explosion : MonoBehaviour
 
         Vector2 center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
         float radius = size * 0.5f;
-        float innerRadius = radius * 0.72f;
         float edgeSoftness = 2f;
+
+        Color[] pixels = new Color[size * size];
 
         for (int y = 0; y < size; y++)
         {
             for (int x = 0; x < size; x++)
             {
                 float distance = Vector2.Distance(new Vector2(x, y), center);
-                float outerAlpha = 1f - Mathf.SmoothStep(radius - edgeSoftness, radius, distance);
-                float innerMask = Mathf.SmoothStep(innerRadius, innerRadius + edgeSoftness, distance);
-                float alpha = Mathf.Clamp01(outerAlpha * innerMask);
-
-                texture.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+                float t = Mathf.Clamp01((distance - (radius - edgeSoftness)) / edgeSoftness);
+                float alpha = 1f - (t * t * (3f - 2f * t));
+                pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
             }
         }
 
+        texture.SetPixels(pixels);
         texture.Apply();
-        return Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+        return texture;
     }
 }
