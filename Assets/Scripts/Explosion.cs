@@ -14,6 +14,9 @@ public class Explosion : MonoBehaviour
     [SerializeField] private LayerMask affectedLayers = ~0;
     [SerializeField] private QueryTriggerInteraction triggerInteraction = QueryTriggerInteraction.Ignore;
 
+    [Header("Charge")]
+    [SerializeField] private float maxChargeTime = 1.5f;
+
     [Header("Highlight UI")]
     [SerializeField] private float highlightSize = 120f;
     [SerializeField] private float highlightDuration = 0.35f;
@@ -21,8 +24,16 @@ public class Explosion : MonoBehaviour
 
     private Canvas overlayCanvas;
     private RawImage highlightImage;
+    private RawImage chargeImage;
+    private LineRenderer _arrowLine;
     private Coroutine highlightCoroutine;
     private readonly HashSet<Rigidbody> rigidbodyCache = new HashSet<Rigidbody>();
+
+    // Charge state
+    private bool _isCharging = false;
+    private float _chargeStartTime = 0f;
+    private float _chargeRatio = 0f;
+    private Vector2 _pressScreenPosition;
 
     void Awake()
     {
@@ -38,12 +49,74 @@ public class Explosion : MonoBehaviour
     {
         if (Input.GetMouseButtonDown(0))
         {
-            Vector2 clickPosition = Input.mousePosition;
-            ShowHighlight(clickPosition);
+            _isCharging = true;
+            _chargeStartTime = Time.time;
+            _pressScreenPosition = Input.mousePosition;
+            _chargeRatio = 0f;
 
-            if (TryGetExplosionCenter(clickPosition, out Vector3 center))
+            // 蓄積インジケータを押下位置に配置して表示開始
+            if (chargeImage != null)
             {
-                ApplyExplosion(center);
+                chargeImage.rectTransform.anchoredPosition = _pressScreenPosition;
+                chargeImage.gameObject.SetActive(true);
+            }
+        }
+
+        if (_isCharging && Input.GetMouseButton(0))
+        {
+            float elapsed = Mathf.Clamp(Time.time - _chargeStartTime, 0f, maxChargeTime);
+            _chargeRatio = elapsed / maxChargeTime;
+
+            // 蓄積インジケータのスケールを 0.5x → 1.5x で更新
+            if (chargeImage != null)
+            {
+                float chargeScale = Mathf.Lerp(0.5f, 1.5f, _chargeRatio);
+                chargeImage.rectTransform.localScale = new Vector3(chargeScale, chargeScale, 1f);
+
+                Color c = highlightColor;
+                c.a = Mathf.Lerp(0.15f, 0.55f, _chargeRatio);
+                chargeImage.color = c;
+            }
+
+            // 方向矢印 LineRenderer を更新
+            UpdateArrowLine();
+        }
+
+        if (Input.GetMouseButtonUp(0) && _isCharging)
+        {
+            _isCharging = false;
+
+            // 蓄積インジケータを非表示
+            if (chargeImage != null)
+            {
+                chargeImage.gameObject.SetActive(false);
+            }
+
+            // 方向矢印を非表示
+            if (_arrowLine != null)
+            {
+                _arrowLine.enabled = false;
+            }
+
+            Vector2 releasePosition = _pressScreenPosition;
+            ShowHighlight(releasePosition);
+
+            // ドラッグ差分ベクトルを計算してワールド方向に変換
+            Vector2 dragDelta = (Vector2)Input.mousePosition - _pressScreenPosition;
+            Vector3 windDir = Vector3.zero;
+            bool hasDrag = dragDelta.magnitude >= 10f;
+            if (hasDrag)
+            {
+                Vector3 camRight = targetCamera.transform.right;
+                Vector3 camUp = targetCamera.transform.up;
+                Vector2 normalized = dragDelta.normalized;
+                windDir = (camRight * normalized.x + camUp * normalized.y).normalized;
+            }
+
+            if (TryGetExplosionCenter(releasePosition, out Vector3 center))
+            {
+                float scaledForce = explosionForce * Mathf.Lerp(0.5f, 2.0f, _chargeRatio);
+                ApplyExplosion(center, scaledForce, hasDrag ? windDir : Vector3.zero, scaledForce);
             }
         }
     }
@@ -74,7 +147,12 @@ public class Explosion : MonoBehaviour
         return false;
     }
 
-    private void ApplyExplosion(Vector3 center)
+    private void ApplyExplosion(Vector3 center, float force)
+    {
+        ApplyExplosion(center, force, Vector3.zero, 0f);
+    }
+
+    private void ApplyExplosion(Vector3 center, float force, Vector3 windDir, float scaledForce)
     {
         Collider[] colliders = Physics.OverlapSphere(center, explosionRadius, affectedLayers, triggerInteraction);
         rigidbodyCache.Clear();
@@ -98,7 +176,13 @@ public class Explosion : MonoBehaviour
                 continue;
             }
 
-            rb.AddExplosionForce(explosionForce, center, explosionRadius, upwardsModifier, ForceMode.Impulse);
+            rb.AddExplosionForce(force, center, explosionRadius, upwardsModifier, ForceMode.Impulse);
+
+            // 指向性風圧：ドラッグ方向が有効な場合に追加で適用
+            if (windDir != Vector3.zero)
+            {
+                rb.AddForce(windDir * scaledForce * 0.5f, ForceMode.Impulse);
+            }
         }
     }
 
@@ -168,25 +252,81 @@ public class Explosion : MonoBehaviour
             }
         }
 
-        if (highlightImage != null)
+        if (highlightImage == null)
+        {
+            GameObject imageObj = new GameObject("ClickHighlight");
+            imageObj.transform.SetParent(overlayCanvas.transform, false);
+            highlightImage = imageObj.AddComponent<RawImage>();
+            highlightImage.raycastTarget = false;
+            highlightImage.texture = CreateCircleTexture(128);
+            highlightImage.color = highlightColor;
+
+            RectTransform rt = highlightImage.rectTransform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.zero;
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(highlightSize, highlightSize);
+
+            highlightImage.gameObject.SetActive(false);
+        }
+
+        if (chargeImage == null)
+        {
+            GameObject chargeObj = new GameObject("ChargeIndicator");
+            chargeObj.transform.SetParent(overlayCanvas.transform, false);
+            chargeImage = chargeObj.AddComponent<RawImage>();
+            chargeImage.raycastTarget = false;
+            chargeImage.texture = CreateCircleTexture(128);
+            chargeImage.color = new Color(highlightColor.r, highlightColor.g, highlightColor.b, 0.15f);
+
+            RectTransform crt = chargeImage.rectTransform;
+            crt.anchorMin = Vector2.zero;
+            crt.anchorMax = Vector2.zero;
+            crt.pivot = new Vector2(0.5f, 0.5f);
+            crt.sizeDelta = new Vector2(highlightSize, highlightSize);
+            crt.localScale = new Vector3(0.5f, 0.5f, 1f);
+
+            chargeImage.gameObject.SetActive(false);
+        }
+
+        if (_arrowLine == null)
+        {
+            _arrowLine = gameObject.AddComponent<LineRenderer>();
+            _arrowLine.useWorldSpace = true;
+            _arrowLine.positionCount = 2;
+            _arrowLine.startWidth = 0.05f;
+            _arrowLine.endWidth = 0.05f;
+            _arrowLine.material = new Material(Shader.Find("Sprites/Default"));
+            _arrowLine.startColor = new Color(1f, 0.5f, 0.1f, 0.8f);
+            _arrowLine.endColor = new Color(1f, 0.5f, 0.1f, 0.8f);
+            _arrowLine.enabled = false;
+        }
+    }
+
+    private void UpdateArrowLine()
+    {
+        if (_arrowLine == null || targetCamera == null)
         {
             return;
         }
 
-        GameObject imageObj = new GameObject("ClickHighlight");
-        imageObj.transform.SetParent(overlayCanvas.transform, false);
-        highlightImage = imageObj.AddComponent<RawImage>();
-        highlightImage.raycastTarget = false;
-        highlightImage.texture = CreateCircleTexture(128);
-        highlightImage.color = highlightColor;
+        Vector2 dragDelta = (Vector2)Input.mousePosition - _pressScreenPosition;
 
-        RectTransform rt = highlightImage.rectTransform;
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.zero;
-        rt.pivot = new Vector2(0.5f, 0.5f);
-        rt.sizeDelta = new Vector2(highlightSize, highlightSize);
+        if (dragDelta.magnitude < 10f)
+        {
+            _arrowLine.enabled = false;
+            return;
+        }
 
-        highlightImage.gameObject.SetActive(false);
+        float depth = 5f;
+        Vector3 startWorld = targetCamera.ScreenToWorldPoint(
+            new Vector3(_pressScreenPosition.x, _pressScreenPosition.y, depth));
+        Vector3 endWorld = targetCamera.ScreenToWorldPoint(
+            new Vector3(Input.mousePosition.x, Input.mousePosition.y, depth));
+
+        _arrowLine.SetPosition(0, startWorld);
+        _arrowLine.SetPosition(1, endWorld);
+        _arrowLine.enabled = true;
     }
 
     private Texture2D CreateCircleTexture(int size)
